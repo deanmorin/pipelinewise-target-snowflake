@@ -308,8 +308,17 @@ def persist_lines(config, lines, table_cache=None, file_format_type: FileFormatT
             LOGGER.debug('ACTIVATE_VERSION message')
 
         elif t == 'STATE':
-            LOGGER.debug('Setting state to %s', o['value'])
-            state = o['value']
+            if state is None:
+                LOGGER.debug('Setting state to %s', o['value'])
+                state = o['value']
+            else:
+                existing_bookmarks = state.get('bookmarks', {})
+                new_bookmarks = o['value'].get('bookmarks', {})
+                merged_bookmarks = {**existing_bookmarks, **new_bookmarks}
+                state = o['value']
+                state['bookmarks'] = merged_bookmarks
+                LOGGER.debug("Merged existing bookmarks %s into %s", existing_bookmarks, o['value'])
+                LOGGER.debug('Set state to %s', state)
 
             # Initially set flushed state
             if not flushed_state:
