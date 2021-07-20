@@ -309,7 +309,7 @@ def persist_lines(config, lines, table_cache=None, file_format_type: FileFormatT
 
         elif t == 'STATE':
             if state is None:
-                LOGGER.debug('Setting state to %s', o['value'])
+                LOGGER.info('Setting state to %s', o['value'])
                 state = o['value']
             else:
                 existing_bookmarks = state.get('bookmarks', {})
@@ -317,8 +317,8 @@ def persist_lines(config, lines, table_cache=None, file_format_type: FileFormatT
                 merged_bookmarks = {**existing_bookmarks, **new_bookmarks}
                 state = o['value']
                 state['bookmarks'] = merged_bookmarks
-                LOGGER.debug("Merged existing bookmarks %s into %s", existing_bookmarks, o['value'])
-                LOGGER.debug('Set state to %s', state)
+                LOGGER.info("Merged existing bookmarks %s into %s", existing_bookmarks, o['value'])
+                LOGGER.info('Set state to %s', state)
 
             # Initially set flushed state
             if not flushed_state:
