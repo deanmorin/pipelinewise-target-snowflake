@@ -22,18 +22,18 @@ setup(name="pipelinewise-target-snowflake",
       py_modules=["target_snowflake"],
       python_requires='>=3.7',
       install_requires=[
-          'pipelinewise-singer-python==1.*',
-          'snowflake-connector-python[pandas]==3.0.4',
+          'pipelinewise-singer-python==1.3.0',
+          'snowflake-connector-python[pandas]==3.12.2',
           'inflection==0.5.1',
-          'joblib==1.2.0',
-          'boto3==1.28.20',
+          'joblib==1.4.2',
+          'boto3==1.35.20',
       ],
       extras_require={
           "test": [
-              "pylint==2.12.*",
-              'pytest==7.4.0',
-              'pytest-cov==3.0.0',
-              "python-dotenv>=0.19,<1.1"
+              'pylint==3.2.7',
+              'pytest==8.3.3',
+              'pytest-cov==5.0.0',
+              'python-dotenv>=1.0.1'
           ]
       },
       entry_points="""
