@@ -108,7 +108,7 @@ class TestDBSync(unittest.TestCase):
 
     def test_authentication_params(self):
         """Test the snowflake connector authentication arguments"""
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
         pem = private_key.private_bytes(encoding=serialization.Encoding.PEM,
                                         format=serialization.PrivateFormat.PKCS8,
                                         encryption_algorithm=serialization.NoEncryption())
