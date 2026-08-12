@@ -95,6 +95,10 @@ DEFAULT_WAREHOUSE = '{warehouse}'
 MUST_CHANGE_PASSWORD = FALSE;
 
 GRANT ROLE ppw_target_snowflake TO USER {user};
+
+-- To authenticate with a key pair instead of a password, register the public key
+-- on the user and use the `private_key` option rather than `password`:
+ALTER USER {user} SET RSA_PUBLIC_KEY = '{public key body, delimiters excluded}';
 ```
 
 Replace `warehouse` between `{` and `}` characters to the actual values from point 3.
@@ -144,7 +148,7 @@ Full list of options in `config.json`:
 | dbname                              | String  | Yes        | Snowflake Database name                                       |
 | user                                | String  | Yes        | Snowflake User                                                |
 | password                            | String  | No         | Snowflake Password. Required unless `private_key` is defined                                            |
-| private_key                         | String  | No         | Snowflake private key for key pair authentication, base64 encoded or PEM formatted. Required unless `password` is defined. Takes precedence over `password` |
+| private_key                         | String  | No         | Unencrypted PKCS#8 private key for key pair authentication, either PEM formatted or the base64 encoding of that PEM. Required unless `password` is defined. Takes precedence over `password` |
 | warehouse                           | String  | Yes        | Snowflake virtual warehouse name                              |
 | role                                | String  | No         | Snowflake role to use. If not defined then the user's default role will be used |
 | aws_access_key_id                   | String  | No         | S3 Access Key Id. If not provided, `AWS_ACCESS_KEY_ID` environment variable or IAM role will be used |

@@ -130,6 +130,46 @@ class TestDBSync(unittest.TestCase):
         # A private key takes precedence over a password
         self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode()}), {'private_key': der})
 
+        # An unusable private key names the config key it came from
+        with self.assertRaisesRegex(ValueError, "'private_key'"):
+            params({'private_key': 'dummy-value'})
+
+    @patch('target_snowflake.db_sync.snowflake.connector.connect')
+    @patch('target_snowflake.db_sync.DbSync.query')
+    def test_open_connection_authentication(self, query_patch, connect_patch):
+        """Test that the authentication arguments reach the snowflake connector"""
+        query_patch.return_value = [{'type': 'CSV'}]
+
+        minimal_config = {
+            'account': "dummy-value",
+            'dbname': "dummy-value",
+            'user': "dummy-value",
+            'password': "dummy-value",
+            'warehouse': "dummy-value",
+            'default_target_schema': "dummy-value",
+            'file_format': "dummy-value"
+        }
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+        pem = private_key.private_bytes(encoding=serialization.Encoding.PEM,
+                                        format=serialization.PrivateFormat.PKCS8,
+                                        encryption_algorithm=serialization.NoEncryption())
+        der = private_key.private_bytes(encoding=serialization.Encoding.DER,
+                                        format=serialization.PrivateFormat.PKCS8,
+                                        encryption_algorithm=serialization.NoEncryption())
+
+        # Password authentication
+        db_sync.DbSync(minimal_config).open_connection()
+        self.assertEqual(connect_patch.call_args.kwargs['password'], 'dummy-value')
+        self.assertNotIn('private_key', connect_patch.call_args.kwargs)
+
+        # Key pair authentication
+        config_with_private_key = {**minimal_config, 'private_key': base64.b64encode(pem).decode()}
+        config_with_private_key.pop('password')
+        db_sync.DbSync(config_with_private_key).open_connection()
+        self.assertEqual(connect_patch.call_args.kwargs['private_key'], der)
+        self.assertNotIn('password', connect_patch.call_args.kwargs)
+
     def test_column_type_mapping(self):
         """Test JSON type to Snowflake column type mappings"""
         mapper = db_sync.column_type

@@ -7,6 +7,7 @@ import time
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
+from functools import lru_cache
 from typing import List, Dict, Union, Tuple, Set
 from singer import get_logger
 from target_snowflake import flattening
@@ -75,12 +76,11 @@ def validate_config(config):
     return errors
 
 
-def authentication_params(config):
-    """Take a config and return the snowflake connector authentication arguments"""
-    private_key = config.get('private_key', None)
-    if not private_key:
-        return {'password': config['password']}
-
+# Deserialising an RSA key validates it, which takes hundreds of milliseconds for a 4096 bit key.
+# A connection is opened per query, so without the cache that cost is paid on every one of them.
+@lru_cache(maxsize=None)
+def private_key_bytes(private_key):
+    """Take a base64 encoded or PEM formatted private key and return it in the DER format"""
     if '-----BEGIN ' in private_key:
         key_content = private_key.encode()
     else:
@@ -90,11 +90,21 @@ def authentication_params(config):
                                                password=None,
                                                backend=default_backend())
 
-    return {
-        'private_key': p_key.private_bytes(encoding=serialization.Encoding.DER,
-                                           format=serialization.PrivateFormat.PKCS8,
-                                           encryption_algorithm=serialization.NoEncryption())
-    }
+    return p_key.private_bytes(encoding=serialization.Encoding.DER,
+                               format=serialization.PrivateFormat.PKCS8,
+                               encryption_algorithm=serialization.NoEncryption())
+
+
+def authentication_params(config):
+    """Take a config and return the snowflake connector authentication arguments"""
+    private_key = config.get('private_key', None)
+    if not private_key:
+        return {'password': config['password']}
+
+    try:
+        return {'private_key': private_key_bytes(private_key)}
+    except (ValueError, TypeError) as ex:
+        raise ValueError(f"Could not load the private key defined in the 'private_key' config key: {ex}") from ex
 
 
 def column_type(schema_property):
@@ -230,6 +240,9 @@ class DbSync:
         if len(config_errors) > 0:
             self.logger.error('Invalid configuration:\n   * %s', '\n   * '.join(config_errors))
             sys.exit(1)
+
+        self.logger.info('Authenticating with %s',
+                         'a private key' if connection_config.get('private_key') else 'a password')
 
         if self.connection_config.get('stage', None):
             stage = stream_utils.stream_name_to_dict(self.connection_config['stage'], separator='.')
