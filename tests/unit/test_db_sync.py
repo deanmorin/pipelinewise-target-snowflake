@@ -1,6 +1,9 @@
+import base64
 import json
 import unittest
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from unittest.mock import patch, call
 
 from target_snowflake import db_sync
@@ -91,6 +94,41 @@ class TestDBSync(unittest.TestCase):
         config_with_archive_load_files = minimal_config.copy()
         config_with_archive_load_files['archive_load_files'] = True
         self.assertGreater(len(validator(config_with_external_stage)), 0)
+
+        # Configuration with a private key instead of a password
+        config_with_private_key = minimal_config.copy()
+        config_with_private_key.pop('password')
+        config_with_private_key['private_key'] = 'dummy-value'
+        self.assertEqual(len(validator(config_with_private_key)), 0)
+
+        # Configuration with neither a password nor a private key - (nr_of_errors >= 0)
+        config_with_no_auth = minimal_config.copy()
+        config_with_no_auth.pop('password')
+        self.assertGreater(len(validator(config_with_no_auth)), 0)
+
+    def test_authentication_params(self):
+        """Test the snowflake connector authentication arguments"""
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = private_key.private_bytes(encoding=serialization.Encoding.PEM,
+                                        format=serialization.PrivateFormat.PKCS8,
+                                        encryption_algorithm=serialization.NoEncryption())
+        der = private_key.private_bytes(encoding=serialization.Encoding.DER,
+                                        format=serialization.PrivateFormat.PKCS8,
+                                        encryption_algorithm=serialization.NoEncryption())
+
+        params = db_sync.authentication_params
+
+        # Password authentication
+        self.assertEqual(params({'password': 'dummy-value'}), {'password': 'dummy-value'})
+
+        # Base64 encoded private key
+        self.assertEqual(params({'private_key': base64.b64encode(pem).decode()}), {'private_key': der})
+
+        # PEM formatted private key
+        self.assertEqual(params({'private_key': pem.decode()}), {'private_key': der})
+
+        # A private key takes precedence over a password
+        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode()}), {'private_key': der})
 
     def test_column_type_mapping(self):
         """Test JSON type to Snowflake column type mappings"""

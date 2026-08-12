@@ -1,9 +1,12 @@
+import base64
 import json
 import sys
 import snowflake.connector
 import re
 import time
 
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 from typing import List, Dict, Union, Tuple, Set
 from singer import get_logger
 from target_snowflake import flattening
@@ -22,7 +25,6 @@ def validate_config(config):
         'account',
         'dbname',
         'user',
-        'password',
         'warehouse',
         's3_bucket',
         'stage',
@@ -33,7 +35,6 @@ def validate_config(config):
         'account',
         'dbname',
         'user',
-        'password',
         'warehouse',
         'file_format'
     ]
@@ -56,6 +57,10 @@ def validate_config(config):
         if not config.get(k, None):
             errors.append(f"Required key is missing from config: [{k}]")
 
+    # Check authentication config
+    if not config.get('password', None) and not config.get('private_key', None):
+        errors.append("Neither 'password' nor 'private_key' keys set in config.")
+
     # Check target schema config
     config_default_target_schema = config.get('default_target_schema', None)
     config_schema_mapping = config.get('schema_mapping', None)
@@ -68,6 +73,28 @@ def validate_config(config):
         errors.append('Archive load files option can be used only with external s3 stages. Please define s3_bucket.')
 
     return errors
+
+
+def authentication_params(config):
+    """Take a config and return the snowflake connector authentication arguments"""
+    private_key = config.get('private_key', None)
+    if not private_key:
+        return {'password': config['password']}
+
+    if '-----BEGIN ' in private_key:
+        key_content = private_key.encode()
+    else:
+        key_content = base64.b64decode(private_key)
+
+    p_key = serialization.load_pem_private_key(key_content,
+                                               password=None,
+                                               backend=default_backend())
+
+    return {
+        'private_key': p_key.private_bytes(encoding=serialization.Encoding.DER,
+                                           format=serialization.PrivateFormat.PKCS8,
+                                           encryption_algorithm=serialization.NoEncryption())
+    }
 
 
 def column_type(schema_property):
@@ -293,7 +320,7 @@ class DbSync:
 
         return snowflake.connector.connect(
             user=self.connection_config['user'],
-            password=self.connection_config['password'],
+            **authentication_params(self.connection_config),
             account=self.connection_config['account'],
             database=self.connection_config['dbname'],
             warehouse=self.connection_config['warehouse'],
