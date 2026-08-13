@@ -106,6 +106,17 @@ class TestDBSync(unittest.TestCase):
         config_with_no_auth.pop('password')
         self.assertGreater(len(validator(config_with_no_auth)), 0)
 
+        # Configuration selecting a private key that is not there - (nr_of_errors >= 0)
+        config_selecting_missing_key = minimal_config.copy()
+        config_selecting_missing_key['use_private_key'] = True
+        self.assertGreater(len(validator(config_selecting_missing_key)), 0)
+
+        # Configuration selecting a private key that is there
+        config_selecting_private_key = minimal_config.copy()
+        config_selecting_private_key['use_private_key'] = True
+        config_selecting_private_key['private_key'] = 'dummy-value'
+        self.assertEqual(len(validator(config_selecting_private_key)), 0)
+
     def test_authentication_params(self):
         """Test the snowflake connector authentication arguments"""
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
@@ -127,8 +138,22 @@ class TestDBSync(unittest.TestCase):
         # PEM formatted private key
         self.assertEqual(params({'private_key': pem.decode()}), {'private_key': der})
 
-        # A private key takes precedence over a password
-        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode()}), {'private_key': der})
+        # An unselected private key does not authenticate while a password is set
+        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode()}),
+                         {'password': 'dummy-value'})
+
+        # A selected private key authenticates instead of the password
+        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode(), 'use_private_key': True}),
+                         {'private_key': der})
+
+        # A private key is selected by the password being gone, whatever the flag says
+        self.assertEqual(params({'private_key': pem.decode(), 'use_private_key': False}), {'private_key': der})
+
+        # Strings are read as the booleans they spell, not for being non-empty
+        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode(), 'use_private_key': 'false'}),
+                         {'password': 'dummy-value'})
+        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode(), 'use_private_key': 'true'}),
+                         {'private_key': der})
 
         # An unusable private key names the config key it came from
         with self.assertRaisesRegex(ValueError, "'private_key'"):
@@ -163,9 +188,14 @@ class TestDBSync(unittest.TestCase):
         self.assertEqual(connect_patch.call_args.kwargs['password'], 'dummy-value')
         self.assertNotIn('private_key', connect_patch.call_args.kwargs)
 
+        # An unselected private key alongside a password
+        config_with_unselected_key = {**minimal_config, 'private_key': base64.b64encode(pem).decode()}
+        db_sync.DbSync(config_with_unselected_key).open_connection()
+        self.assertEqual(connect_patch.call_args.kwargs['password'], 'dummy-value')
+        self.assertNotIn('private_key', connect_patch.call_args.kwargs)
+
         # Key pair authentication
-        config_with_private_key = {**minimal_config, 'private_key': base64.b64encode(pem).decode()}
-        config_with_private_key.pop('password')
+        config_with_private_key = {**config_with_unselected_key, 'use_private_key': True}
         db_sync.DbSync(config_with_private_key).open_connection()
         self.assertEqual(connect_patch.call_args.kwargs['private_key'], der)
         self.assertNotIn('password', connect_patch.call_args.kwargs)

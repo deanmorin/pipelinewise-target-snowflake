@@ -62,6 +62,9 @@ def validate_config(config):
     if not config.get('password', None) and not config.get('private_key', None):
         errors.append("Neither 'password' nor 'private_key' keys set in config.")
 
+    if config.get('use_private_key', None) and not config.get('private_key', None):
+        errors.append("'use_private_key' is set in config but 'private_key' is not.")
+
     # Check target schema config
     config_default_target_schema = config.get('default_target_schema', None)
     config_schema_mapping = config.get('schema_mapping', None)
@@ -95,14 +98,27 @@ def private_key_bytes(private_key):
                                encryption_algorithm=serialization.NoEncryption())
 
 
+def private_key_selected(config):
+    """Take a config and return whether the private key authenticates instead of the password"""
+    if not config.get('private_key', None):
+        return False
+
+    # A string reaches here when 'use_private_key' is declared as anything but a boolean, where
+    # 'false' would otherwise be truthy and silently select the key in every environment at once.
+    use_private_key = config.get('use_private_key', False)
+    if isinstance(use_private_key, str):
+        use_private_key = use_private_key.strip().lower() in ('true', '1')
+
+    return bool(use_private_key) or not config.get('password', None)
+
+
 def authentication_params(config):
     """Take a config and return the snowflake connector authentication arguments"""
-    private_key = config.get('private_key', None)
-    if not private_key:
+    if not private_key_selected(config):
         return {'password': config['password']}
 
     try:
-        return {'private_key': private_key_bytes(private_key)}
+        return {'private_key': private_key_bytes(config['private_key'])}
     except (ValueError, TypeError) as ex:
         raise ValueError(f"Could not load the private key defined in the 'private_key' config key: {ex}") from ex
 
@@ -242,7 +258,7 @@ class DbSync:
             sys.exit(1)
 
         self.logger.info('Authenticating with %s',
-                         'a private key' if connection_config.get('private_key') else 'a password')
+                         'a private key' if private_key_selected(connection_config) else 'a password')
 
         if self.connection_config.get('stage', None):
             stage = stream_utils.stream_name_to_dict(self.connection_config['stage'], separator='.')

@@ -148,7 +148,8 @@ Full list of options in `config.json`:
 | dbname                              | String  | Yes        | Snowflake Database name                                       |
 | user                                | String  | Yes        | Snowflake User                                                |
 | password                            | String  | No         | Snowflake Password. Required unless `private_key` is defined                                            |
-| private_key                         | String  | No         | Unencrypted PKCS#8 private key for key pair authentication, either PEM formatted or the base64 encoding of that PEM. Required unless `password` is defined. Takes precedence over `password` |
+| private_key                         | String  | No         | Unencrypted PKCS#8 private key for key pair authentication, either PEM formatted or the base64 encoding of that PEM. Required unless `password` is defined |
+| use_private_key                     | Boolean | No         | (Default: False) Authenticate with `private_key` rather than `password`. A `private_key` is otherwise only used when no `password` is defined, so that it can be deployed before it is used |
 | warehouse                           | String  | Yes        | Snowflake virtual warehouse name                              |
 | role                                | String  | No         | Snowflake role to use. If not defined then the user's default role will be used |
 | aws_access_key_id                   | String  | No         | S3 Access Key Id. If not provided, `AWS_ACCESS_KEY_ID` environment variable or IAM role will be used |
