@@ -1,6 +1,9 @@
+import base64
 import json
 import unittest
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from unittest.mock import patch, call
 
 from target_snowflake import db_sync
@@ -91,6 +94,129 @@ class TestDBSync(unittest.TestCase):
         config_with_archive_load_files = minimal_config.copy()
         config_with_archive_load_files['archive_load_files'] = True
         self.assertGreater(len(validator(config_with_external_stage)), 0)
+
+        # Configuration with a private key instead of a password
+        config_with_private_key = minimal_config.copy()
+        config_with_private_key.pop('password')
+        config_with_private_key['private_key'] = 'dummy-value'
+        self.assertEqual(len(validator(config_with_private_key)), 0)
+
+        # Configuration with neither a password nor a private key - (nr_of_errors >= 0)
+        config_with_no_auth = minimal_config.copy()
+        config_with_no_auth.pop('password')
+        self.assertGreater(len(validator(config_with_no_auth)), 0)
+
+        # Configuration selecting a private key that is not there - (nr_of_errors >= 0)
+        config_selecting_missing_key = minimal_config.copy()
+        config_selecting_missing_key['use_private_key'] = True
+        self.assertGreater(len(validator(config_selecting_missing_key)), 0)
+
+        # Configuration selecting a private key that is there
+        config_selecting_private_key = minimal_config.copy()
+        config_selecting_private_key['use_private_key'] = True
+        config_selecting_private_key['private_key'] = 'dummy-value'
+        self.assertEqual(len(validator(config_selecting_private_key)), 0)
+
+    def test_authentication_params(self):
+        """Test the snowflake connector authentication arguments"""
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+        pem = private_key.private_bytes(encoding=serialization.Encoding.PEM,
+                                        format=serialization.PrivateFormat.PKCS8,
+                                        encryption_algorithm=serialization.NoEncryption())
+        der = private_key.private_bytes(encoding=serialization.Encoding.DER,
+                                        format=serialization.PrivateFormat.PKCS8,
+                                        encryption_algorithm=serialization.NoEncryption())
+        encrypted_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.BestAvailableEncryption(b'dummy-passphrase'))
+
+        params = db_sync.authentication_params
+
+        # Password authentication
+        self.assertEqual(params({'password': 'dummy-value'}), {'password': 'dummy-value'})
+
+        # Base64 encoded private key
+        self.assertEqual(params({'private_key': base64.b64encode(pem).decode()}), {'private_key': der})
+
+        # PEM formatted private key
+        self.assertEqual(params({'private_key': pem.decode()}), {'private_key': der})
+
+        # Passphrase encrypted private key, in either form
+        self.assertEqual(params({'private_key': encrypted_pem.decode(),
+                                 'private_key_passphrase': 'dummy-passphrase'}), {'private_key': der})
+        self.assertEqual(params({'private_key': base64.b64encode(encrypted_pem).decode(),
+                                 'private_key_passphrase': 'dummy-passphrase'}), {'private_key': der})
+
+        # An unselected private key does not authenticate while a password is set
+        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode()}),
+                         {'password': 'dummy-value'})
+
+        # A selected private key authenticates instead of the password
+        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode(), 'use_private_key': True}),
+                         {'private_key': der})
+
+        # A private key is selected by the password being gone, whatever the flag says
+        self.assertEqual(params({'private_key': pem.decode(), 'use_private_key': False}), {'private_key': der})
+
+        # Strings are read as the booleans they spell, not for being non-empty
+        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode(), 'use_private_key': 'false'}),
+                         {'password': 'dummy-value'})
+        self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode(), 'use_private_key': 'true'}),
+                         {'private_key': der})
+
+        # An unusable private key names the config key it came from
+        with self.assertRaisesRegex(ValueError, "'private_key'"):
+            params({'private_key': 'dummy-value'})
+
+        # A passphrase that is missing, wrong, or given for an unencrypted key all fail the same way
+        with self.assertRaisesRegex(ValueError, "'private_key'"):
+            params({'private_key': encrypted_pem.decode()})
+        with self.assertRaisesRegex(ValueError, "'private_key'"):
+            params({'private_key': encrypted_pem.decode(), 'private_key_passphrase': 'wrong-passphrase'})
+        with self.assertRaisesRegex(ValueError, "'private_key'"):
+            params({'private_key': pem.decode(), 'private_key_passphrase': 'dummy-passphrase'})
+
+    @patch('target_snowflake.db_sync.snowflake.connector.connect')
+    @patch('target_snowflake.db_sync.DbSync.query')
+    def test_open_connection_authentication(self, query_patch, connect_patch):
+        """Test that the authentication arguments reach the snowflake connector"""
+        query_patch.return_value = [{'type': 'CSV'}]
+
+        minimal_config = {
+            'account': "dummy-value",
+            'dbname': "dummy-value",
+            'user': "dummy-value",
+            'password': "dummy-value",
+            'warehouse': "dummy-value",
+            'default_target_schema': "dummy-value",
+            'file_format': "dummy-value"
+        }
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+        pem = private_key.private_bytes(encoding=serialization.Encoding.PEM,
+                                        format=serialization.PrivateFormat.PKCS8,
+                                        encryption_algorithm=serialization.NoEncryption())
+        der = private_key.private_bytes(encoding=serialization.Encoding.DER,
+                                        format=serialization.PrivateFormat.PKCS8,
+                                        encryption_algorithm=serialization.NoEncryption())
+
+        # Password authentication
+        db_sync.DbSync(minimal_config).open_connection()
+        self.assertEqual(connect_patch.call_args.kwargs['password'], 'dummy-value')
+        self.assertNotIn('private_key', connect_patch.call_args.kwargs)
+
+        # An unselected private key alongside a password
+        config_with_unselected_key = {**minimal_config, 'private_key': base64.b64encode(pem).decode()}
+        db_sync.DbSync(config_with_unselected_key).open_connection()
+        self.assertEqual(connect_patch.call_args.kwargs['password'], 'dummy-value')
+        self.assertNotIn('private_key', connect_patch.call_args.kwargs)
+
+        # Key pair authentication
+        config_with_private_key = {**config_with_unselected_key, 'use_private_key': True}
+        db_sync.DbSync(config_with_private_key).open_connection()
+        self.assertEqual(connect_patch.call_args.kwargs['private_key'], der)
+        self.assertNotIn('password', connect_patch.call_args.kwargs)
 
     def test_column_type_mapping(self):
         """Test JSON type to Snowflake column type mappings"""

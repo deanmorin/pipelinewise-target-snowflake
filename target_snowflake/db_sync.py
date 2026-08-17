@@ -1,9 +1,13 @@
+import base64
 import json
 import sys
 import snowflake.connector
 import re
 import time
 
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
+from functools import lru_cache
 from typing import List, Dict, Union, Tuple, Set
 from singer import get_logger
 from target_snowflake import flattening
@@ -22,7 +26,6 @@ def validate_config(config):
         'account',
         'dbname',
         'user',
-        'password',
         'warehouse',
         's3_bucket',
         'stage',
@@ -33,7 +36,6 @@ def validate_config(config):
         'account',
         'dbname',
         'user',
-        'password',
         'warehouse',
         'file_format'
     ]
@@ -56,6 +58,13 @@ def validate_config(config):
         if not config.get(k, None):
             errors.append(f"Required key is missing from config: [{k}]")
 
+    # Check authentication config
+    if not config.get('password', None) and not config.get('private_key', None):
+        errors.append("Neither 'password' nor 'private_key' keys set in config.")
+
+    if config.get('use_private_key', None) and not config.get('private_key', None):
+        errors.append("'use_private_key' is set in config but 'private_key' is not.")
+
     # Check target schema config
     config_default_target_schema = config.get('default_target_schema', None)
     config_schema_mapping = config.get('schema_mapping', None)
@@ -68,6 +77,51 @@ def validate_config(config):
         errors.append('Archive load files option can be used only with external s3 stages. Please define s3_bucket.')
 
     return errors
+
+
+# Deserialising an RSA key validates it, which takes hundreds of milliseconds for a 4096 bit key.
+# A connection is opened per query, so without the cache that cost is paid on every one of them.
+@lru_cache(maxsize=None)
+def private_key_bytes(private_key, passphrase=None):
+    """Take a base64 encoded or PEM formatted private key and return it in the DER format"""
+    if '-----BEGIN ' in private_key:
+        key_content = private_key.encode()
+    else:
+        key_content = base64.b64decode(private_key)
+
+    p_key = serialization.load_pem_private_key(key_content,
+                                               password=passphrase.encode() if passphrase else None,
+                                               backend=default_backend())
+
+    return p_key.private_bytes(encoding=serialization.Encoding.DER,
+                               format=serialization.PrivateFormat.PKCS8,
+                               encryption_algorithm=serialization.NoEncryption())
+
+
+def private_key_selected(config):
+    """Take a config and return whether the private key authenticates instead of the password"""
+    if not config.get('private_key', None):
+        return False
+
+    # A string reaches here when 'use_private_key' is declared as anything but a boolean, where
+    # 'false' would otherwise be truthy and silently select the key in every environment at once.
+    use_private_key = config.get('use_private_key', False)
+    if isinstance(use_private_key, str):
+        use_private_key = use_private_key.strip().lower() in ('true', '1')
+
+    return bool(use_private_key) or not config.get('password', None)
+
+
+def authentication_params(config):
+    """Take a config and return the snowflake connector authentication arguments"""
+    if not private_key_selected(config):
+        return {'password': config['password']}
+
+    try:
+        return {'private_key': private_key_bytes(config['private_key'],
+                                                 config.get('private_key_passphrase', None))}
+    except (ValueError, TypeError) as ex:
+        raise ValueError(f"Could not load the private key defined in the 'private_key' config key: {ex}") from ex
 
 
 def column_type(schema_property):
@@ -204,6 +258,9 @@ class DbSync:
             self.logger.error('Invalid configuration:\n   * %s', '\n   * '.join(config_errors))
             sys.exit(1)
 
+        self.logger.info('Authenticating with %s',
+                         'a private key' if private_key_selected(connection_config) else 'a password')
+
         if self.connection_config.get('stage', None):
             stage = stream_utils.stream_name_to_dict(self.connection_config['stage'], separator='.')
             if not stage['schema_name']:
@@ -293,7 +350,7 @@ class DbSync:
 
         return snowflake.connector.connect(
             user=self.connection_config['user'],
-            password=self.connection_config['password'],
+            **authentication_params(self.connection_config),
             account=self.connection_config['account'],
             database=self.connection_config['dbname'],
             warehouse=self.connection_config['warehouse'],
