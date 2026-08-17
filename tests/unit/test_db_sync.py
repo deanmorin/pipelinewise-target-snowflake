@@ -126,6 +126,10 @@ class TestDBSync(unittest.TestCase):
         der = private_key.private_bytes(encoding=serialization.Encoding.DER,
                                         format=serialization.PrivateFormat.PKCS8,
                                         encryption_algorithm=serialization.NoEncryption())
+        encrypted_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.BestAvailableEncryption(b'dummy-passphrase'))
 
         params = db_sync.authentication_params
 
@@ -137,6 +141,12 @@ class TestDBSync(unittest.TestCase):
 
         # PEM formatted private key
         self.assertEqual(params({'private_key': pem.decode()}), {'private_key': der})
+
+        # Passphrase encrypted private key, in either form
+        self.assertEqual(params({'private_key': encrypted_pem.decode(),
+                                 'private_key_passphrase': 'dummy-passphrase'}), {'private_key': der})
+        self.assertEqual(params({'private_key': base64.b64encode(encrypted_pem).decode(),
+                                 'private_key_passphrase': 'dummy-passphrase'}), {'private_key': der})
 
         # An unselected private key does not authenticate while a password is set
         self.assertEqual(params({'password': 'dummy-value', 'private_key': pem.decode()}),
@@ -158,6 +168,14 @@ class TestDBSync(unittest.TestCase):
         # An unusable private key names the config key it came from
         with self.assertRaisesRegex(ValueError, "'private_key'"):
             params({'private_key': 'dummy-value'})
+
+        # A passphrase that is missing, wrong, or given for an unencrypted key all fail the same way
+        with self.assertRaisesRegex(ValueError, "'private_key'"):
+            params({'private_key': encrypted_pem.decode()})
+        with self.assertRaisesRegex(ValueError, "'private_key'"):
+            params({'private_key': encrypted_pem.decode(), 'private_key_passphrase': 'wrong-passphrase'})
+        with self.assertRaisesRegex(ValueError, "'private_key'"):
+            params({'private_key': pem.decode(), 'private_key_passphrase': 'dummy-passphrase'})
 
     @patch('target_snowflake.db_sync.snowflake.connector.connect')
     @patch('target_snowflake.db_sync.DbSync.query')

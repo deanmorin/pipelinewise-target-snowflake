@@ -148,7 +148,8 @@ Full list of options in `config.json`:
 | dbname                              | String  | Yes        | Snowflake Database name                                       |
 | user                                | String  | Yes        | Snowflake User                                                |
 | password                            | String  | No         | Snowflake Password. Required unless `private_key` is defined                                            |
-| private_key                         | String  | No         | Unencrypted PKCS#8 private key for key pair authentication, either PEM formatted or the base64 encoding of that PEM. Required unless `password` is defined |
+| private_key                         | String  | No         | PKCS#8 private key for key pair authentication, either PEM formatted or the base64 encoding of that PEM. Required unless `password` is defined |
+| private_key_passphrase              | String  | No         | Passphrase that decrypts `private_key`. Required when the key is encrypted, and must be left undefined when it is not |
 | use_private_key                     | Boolean | No         | (Default: False) Authenticate with `private_key` rather than `password`. A `private_key` is otherwise only used when no `password` is defined, so that it can be deployed before it is used |
 | warehouse                           | String  | Yes        | Snowflake virtual warehouse name                              |
 | role                                | String  | No         | Snowflake role to use. If not defined then the user's default role will be used |
